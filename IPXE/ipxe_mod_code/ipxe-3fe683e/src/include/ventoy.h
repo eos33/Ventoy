@@ -13,6 +13,15 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 
 #define VENTOY_GUID { 0x77772020, 0x2e77, 0x6576, { 0x6e, 0x74, 0x6f, 0x79, 0x2e, 0x6e, 0x65, 0x74 }}
 
+typedef enum ventoy_chain_type
+{
+    ventoy_chain_linux = 0, /* 0: linux */
+    ventoy_chain_windows,   /* 1: windows */
+    ventoy_chain_wim,       /* 2: wim */
+
+    ventoy_chain_max
+}ventoy_chain_type;
+
 #pragma pack(1)
 
 typedef struct ventoy_guid
@@ -170,6 +179,7 @@ typedef struct ventoy_sector_flag
 }ventoy_sector_flag;
 
 #define VENTOY_BIOS_FAKE_DRIVE  0xFE
+#define VENTOY_BOOT_FIXBIN_DRIVE  0xFD
 
 extern int g_debug;
 extern char *g_cmdline_copy;

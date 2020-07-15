@@ -6,16 +6,17 @@ print_usage() {
     echo 'Usage:  Ventoy2Disk.sh CMD [ OPTION ] /dev/sdX'
     echo '  CMD:'
     echo '   -i  install ventoy to sdX (fail if disk already installed with ventoy)'
-    echo '   -u  update ventoy in sdX'
     echo '   -I  force install ventoy to sdX (no matter installed or not)'
+    echo '   -u  update ventoy in sdX'
     echo ''
     echo '  OPTION: (optional)'
-    echo '   -s  enable secure boot support (default is disabled)'
+    echo '   -r SIZE_MB  preserve some space at the bottom of the disk (only for install)'
+    echo '   -s          enable secure boot support (default is disabled)'
+    echo '   -g          use GPT partition style, default is MBR (only for install)'
     echo ''
-    
 }
 
-
+RESERVE_SIZE_MB=0
 while [ -n "$1" ]; do
     if [ "$1" = "-i" ]; then
         MODE="install"
@@ -26,6 +27,12 @@ while [ -n "$1" ]; do
         MODE="update"
     elif [ "$1" = "-s" ]; then
         SECUREBOOT="YES"
+    elif [ "$1" = "-g" ]; then
+        VTGPT="YES"
+    elif [ "$1" = "-r" ]; then
+        RESERVE_SPACE="YES"
+        shift
+        RESERVE_SIZE_MB=$1
     else
         if ! [ -b "$1" ]; then
             vterr "$1 is NOT a valid device"
@@ -53,6 +60,15 @@ if [ -e /sys/class/block/${DISK#/dev/}/start ]; then
     exit 1
 fi
 
+if [ -n "$RESERVE_SPACE" ]; then
+    if echo $RESERVE_SIZE_MB | grep -q '^[0-9][0-9]*$'; then
+        vtdebug "User will reserve $RESERVE_SIZE_MB MB disk space"
+    else
+        vterr "$RESERVE_SIZE_MB is invalid for reserved space"
+        exit 1
+    fi
+fi
+
 if dd if="$DISK" of=/dev/null bs=1 count=1 >/dev/null 2>&1; then
     vtdebug "root permission check ok ..."
 else
@@ -61,7 +77,7 @@ else
     exit 1
 fi
 
-vtdebug "MODE=$MODE FORCE=$FORCE"
+vtdebug "MODE=$MODE FORCE=$FORCE RESERVE_SPACE=$RESERVE_SPACE RESERVE_SIZE_MB=$RESERVE_SIZE_MB"
 
 if ! check_tool_work_ok; then
     vterr "Some tools can not run in current system. Please check log.txt for detail."
@@ -96,13 +112,22 @@ fi
 if [ "$MODE" = "install" ]; then
     vtdebug "install ventoy ..."
 
-    if parted -v > /dev/null 2>&1; then
-        PARTTOOL='parted'
-    elif fdisk -v >/dev/null 2>&1; then
-        PARTTOOL='fdisk'
+    if [ -n "$VTGPT" ]; then
+        if parted -v > /dev/null 2>&1; then
+            PARTTOOL='parted'
+        else
+            vterr "parted is not found in the sysstem, Ventoy can't create new partition."
+            exit 1
+        fi
     else
-        vterr "Both parted and fdisk are not found in the sysstem, Ventoy can't create new partition."
-        exit 1
+        if parted -v > /dev/null 2>&1; then
+            PARTTOOL='parted'
+        elif fdisk -v >/dev/null 2>&1; then
+            PARTTOOL='fdisk'
+        else
+            vterr "Both parted and fdisk are not found in the sysstem, Ventoy can't create new partition."
+            exit 1
+        fi
     fi
     
     version=$(get_disk_ventoy_version $DISK)
@@ -124,10 +149,30 @@ if [ "$MODE" = "install" ]; then
         exit 1
     fi
 
+    if [ -n "$RESERVE_SPACE" ]; then
+        sum_size_mb=$(expr $RESERVE_SIZE_MB + $VENTOY_PART_SIZE_MB)
+        reserve_sector_num=$(expr $sum_size_mb \* 2048)
+        
+        if [ $disk_sector_num -le $reserve_sector_num ]; then
+            vterr "Can't reserve $RESERVE_SIZE_MB MB space from $DISK"
+            exit 1
+        fi
+    fi
+
     #Print disk info
     echo "Disk : $DISK"
     parted -s $DISK p 2>&1 | grep Model
-    echo "Size : $disk_size_gb GB"
+    echo "Size : $disk_size_gb GB"    
+    if [ -n "$VTGPT" ]; then
+        echo "Style: GPT"
+    else
+        echo "Style: MBR"
+    fi    
+    echo ''
+
+    if [ -n "$RESERVE_SPACE" ]; then
+        echo "You will reserve $RESERVE_SIZE_MB MB disk space "
+    fi
     echo ''
 
     vtwarn "Attention:"
@@ -162,7 +207,13 @@ if [ "$MODE" = "install" ]; then
         exit 1
     fi
 
-    format_ventoy_disk $DISK $PARTTOOL
+    if [ -n "$VTGPT" ]; then
+        vtdebug "format_ventoy_disk_gpt $RESERVE_SIZE_MB $DISK $PARTTOOL ..."
+        format_ventoy_disk_gpt $RESERVE_SIZE_MB $DISK $PARTTOOL
+    else
+        vtdebug "format_ventoy_disk_mbr $RESERVE_SIZE_MB $DISK $PARTTOOL ..."
+        format_ventoy_disk_mbr $RESERVE_SIZE_MB $DISK $PARTTOOL
+    fi
 
     # format part1
     if ventoy_is_linux64; then
@@ -186,8 +237,17 @@ if [ "$MODE" = "install" ]; then
     chmod +x ./tool/vtoy_gen_uuid
 
     vtinfo "writing data to disk ..."
+    
     dd status=none conv=fsync if=./boot/boot.img of=$DISK bs=1 count=446
-    ./tool/xzcat ./boot/core.img.xz | dd status=none conv=fsync of=$DISK bs=512 count=2047 seek=1
+    
+    if [ -n "$VTGPT" ]; then
+        echo -en '\x22' | dd status=none of=$DISK conv=fsync bs=1 count=1 seek=92        
+        ./tool/xzcat ./boot/core.img.xz | dd status=none conv=fsync of=$DISK bs=512 count=2014 seek=34
+        echo -en '\x23' | dd of=$DISK conv=fsync bs=1 count=1 seek=17908 status=none
+    else
+        ./tool/xzcat ./boot/core.img.xz | dd status=none conv=fsync of=$DISK bs=512 count=2047 seek=1
+    fi
+    
     ./tool/xzcat ./ventoy/ventoy.disk.img.xz | dd status=none conv=fsync of=$DISK bs=512 count=$VENTOY_SECTOR_NUM seek=$part2_start_sector
     
     #disk uuid
@@ -263,23 +323,31 @@ else
     fi
 
     PART2=$(get_disk_part_name $DISK 2)
+    SHORT_PART2=${PART2#/dev/}
+    part2_start=$(cat /sys/class/block/$SHORT_PART2/start)
     
-    dd status=none conv=fsync if=./boot/boot.img of=$DISK bs=1 count=440
+    PART1_TYPE=$(dd if=$DISK bs=1 count=1 skip=450 status=none | ./tool/hexdump -n1 -e  '1/1 "%02X"')
     
-    PART1_ACTIVE=$(dd if=$DISK bs=1 count=1 skip=446 status=none | ./tool/hexdump -n1 -e  '1/1 "%02X"')
-    PART2_ACTIVE=$(dd if=$DISK bs=1 count=1 skip=462 status=none | ./tool/hexdump -n1 -e  '1/1 "%02X"')
+    if [ "$PART1_TYPE" = "EE" ]; then
+        vtdebug "This is GPT partition style ..."        
+        ./tool/xzcat ./boot/core.img.xz | dd status=none conv=fsync of=$DISK bs=512 count=2014 seek=34
+        echo -en '\x23' | dd of=$DISK conv=fsync bs=1 count=1 seek=17908 status=none
+    else
+        vtdebug "This is MBR partition style ..."
+        dd status=none conv=fsync if=./boot/boot.img of=$DISK bs=1 count=440
     
-    vtdebug "PART1_ACTIVE=$PART1_ACTIVE  PART2_ACTIVE=$PART2_ACTIVE"
-    if [ "$PART1_ACTIVE" = "00" ] && [ "$PART2_ACTIVE" = "80" ]; then
-        vtdebug "change 1st partition active, 2nd partition inactive ..."
-        echo -en '\x80' | dd of=$DISK conv=fsync bs=1 count=1 seek=446 status=none
-        echo -en '\x00' | dd of=$DISK conv=fsync bs=1 count=1 seek=462 status=none
+        PART1_ACTIVE=$(dd if=$DISK bs=1 count=1 skip=446 status=none | ./tool/hexdump -n1 -e  '1/1 "%02X"')
+        PART2_ACTIVE=$(dd if=$DISK bs=1 count=1 skip=462 status=none | ./tool/hexdump -n1 -e  '1/1 "%02X"')
+        
+        vtdebug "PART1_ACTIVE=$PART1_ACTIVE  PART2_ACTIVE=$PART2_ACTIVE"
+        if [ "$PART1_ACTIVE" = "00" ] && [ "$PART2_ACTIVE" = "80" ]; then
+            vtdebug "change 1st partition active, 2nd partition inactive ..."
+            echo -en '\x80' | dd of=$DISK conv=fsync bs=1 count=1 seek=446 status=none
+            echo -en '\x00' | dd of=$DISK conv=fsync bs=1 count=1 seek=462 status=none
+        fi
+        ./tool/xzcat ./boot/core.img.xz | dd status=none conv=fsync of=$DISK bs=512 count=2047 seek=1
     fi
-    
-    ./tool/xzcat ./boot/core.img.xz | dd status=none conv=fsync of=$DISK bs=512 count=2047 seek=1  
 
-    disk_sector_num=$(cat /sys/block/${DISK#/dev/}/size) 
-    part2_start=$(expr $disk_sector_num - $VENTOY_SECTOR_NUM)
     ./tool/xzcat ./ventoy/ventoy.disk.img.xz | dd status=none conv=fsync of=$DISK bs=512 count=$VENTOY_SECTOR_NUM seek=$part2_start
 
     sync
