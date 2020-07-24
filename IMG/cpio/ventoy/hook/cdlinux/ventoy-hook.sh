@@ -36,8 +36,8 @@ done
 $BUSYBOX_PATH/umount /vtmnt && $BUSYBOX_PATH/rm -rf /vtmnt
 $BUSYBOX_PATH/cp -a /ventoy /ventoy_rdroot
 
-echo "CDL_DEV=/dev/mapper/ventoy" >> /ventoy_rdroot/etc/default/cdlinux
+echo 'echo "CDL_DEV=/dev/mapper/ventoy" >>"$VAR_FILE"' >> /ventoy_rdroot/etc/rc.d/rc.var
 
 ventoy_set_rule_dir_prefix /ventoy_rdroot
 ventoy_systemd_udevd_work_around
-ventoy_add_udev_rule "$VTOY_PATH/hook/default/udev_disk_hook.sh %k"
+ventoy_add_udev_rule "$VTOY_PATH/hook/default/udev_disk_hook.sh %k noreplace"

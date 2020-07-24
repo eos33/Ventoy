@@ -133,8 +133,9 @@ ventoy_get_os_type() {
         if $GREP -q 'XenServer' /etc/os-release; then
             echo 'xen'; return
         elif $GREP -q 'SUSE ' /etc/os-release; then
-            echo 'suse'; return
-       
+            echo 'suse'; return        
+        elif $GREP -q 'uruk' /etc/os-release; then
+            echo 'debian'; return
         fi
     fi
     
@@ -204,6 +205,26 @@ ventoy_get_os_type() {
         echo 'cdlinux'; return
     fi
     
+    if $GREP -q 'parabola' /proc/version; then
+        echo 'parabola'; return
+    fi
+    
+    if $GREP -q 'cucumber' /proc/version; then
+        echo 'cucumber'; return
+    fi
+    
+    if $GREP -q 'fatdog' /proc/version; then
+        echo 'fatdog'; return
+    fi
+    
+    if $GREP -q 'KWORT' /proc/version; then
+        echo 'kwort'; return
+    fi
+    
+    if $GREP -q 'iwamoto' /proc/version; then
+        echo 'vine'; return
+    fi
+    
     echo "default"
 }
 
@@ -229,6 +250,7 @@ if [ "$VTOY_BREAK_LEVEL" = "03" ] || [ "$VTOY_BREAK_LEVEL" = "13" ]; then
     fi
     exec $BUSYBOX_PATH/sh
 fi
+
 
 ####################################################################
 #                                                                  #
